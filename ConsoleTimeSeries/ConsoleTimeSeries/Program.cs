@@ -38,9 +38,21 @@ var forecastingPipeline = mlContext.Forecasting.ForecastBySsa(
 
 SsaForecastingTransformer forecaster = forecastingPipeline.Fit(firstYearData);
 
+//评做模型
+Evaluate(secondYearData, forecaster, mlContext);
+
+//保存模型
+var forecastEngine = forecaster.CreateTimeSeriesEngine<ModelInput, ModelOutput>(mlContext);
+forecastEngine.CheckPoint(mlContext, modelPath);
+
+//使用模型
+Forecast(secondYearData, 7, forecastEngine, mlContext);
+
 
 Console.WriteLine("Hello, World!");
 
+
+//评估模型
 void Evaluate(IDataView testData, ITransformer model, MLContext mlContext)
 {
     IDataView predictions = model.Transform(testData);
@@ -49,5 +61,54 @@ void Evaluate(IDataView testData, ITransformer model, MLContext mlContext)
     mlContext.Data.CreateEnumerable<ModelInput>(testData, true)
         .Select(observed => observed.TotalRentals);
 
+    //获取预测值
+    IEnumerable<float> forecast =
+    mlContext.Data.CreateEnumerable<ModelOutput>(predictions, true)
+        .Select(prediction => prediction.ForecastedRentals[0]);
 
+    //计算实际值和预测值之间的差异，通常称为误差。
+    var metrics = actual.Zip(forecast, (actualValue, forecastValue) => actualValue - forecastValue);
+
+    //通过计算平均绝对误差和均方根误差值来衡量性能。
+    var MAE = metrics.Average(error => Math.Abs(error)); // Mean Absolute Error
+    var RMSE = Math.Sqrt(metrics.Average(error => Math.Pow(error, 2))); // Root Mean Squared Error
+
+    //将指标输出到控制台。
+    Console.WriteLine("Evaluation Metrics");
+    Console.WriteLine("---------------------");
+    Console.WriteLine($"Mean Absolute Error: {MAE:F3}");
+    Console.WriteLine($"Root Mean Squared Error: {RMSE:F3}\n");
+
+
+}
+
+void Forecast(IDataView testData, int horizon, TimeSeriesPredictionEngine<ModelInput, ModelOutput> forecaster, MLContext mlContext)
+{
+
+    ModelOutput forecast = forecaster.Predict();
+
+    IEnumerable<string> forecastOutput =
+        mlContext.Data.CreateEnumerable<ModelInput>(testData, reuseRowObject: false)
+            .Take(horizon)
+            .Select((ModelInput rental, int index) =>
+            {
+                string rentalDate = rental.RentalDate.ToShortDateString();
+                float actualRentals = rental.TotalRentals;
+                float lowerEstimate = Math.Max(0, forecast.LowerBoundRentals[index]);
+                float estimate = forecast.ForecastedRentals[index];
+                float upperEstimate = forecast.UpperBoundRentals[index];
+                return $"Date: {rentalDate}\n" +
+                $"Actual Rentals: {actualRentals}\n" +
+                $"Lower Estimate: {lowerEstimate}\n" +
+                $"Forecast: {estimate}\n" +
+                $"Upper Estimate: {upperEstimate}\n";
+            });
+
+    // Output predictions
+    Console.WriteLine("Rental Forecast");
+    Console.WriteLine("---------------------");
+    foreach (var prediction in forecastOutput)
+    {
+        Console.WriteLine(prediction);
+    }
 }
